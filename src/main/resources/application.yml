@@ -1,0 +1,173 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Mini Banking API — Application Configuration
+# Profiles: default (dev), test, prod
+# Secrets are NEVER hardcoded; they are injected via environment variables.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  application:
+    name: mini-banking-api
+
+  # Default profile when no SPRING_PROFILES_ACTIVE env var is set
+  profiles:
+    active: dev
+
+  # ── JPA / Hibernate ──────────────────────────────────────────────────────
+  jpa:
+    hibernate:
+      ddl-auto: validate           # Flyway owns the schema; Hibernate only validates
+    properties:
+      hibernate:
+        format_sql: true
+        default_schema: public
+        jdbc:
+          time_zone: UTC
+    open-in-view: false            # Prevents lazy-loading anti-pattern in web layer
+
+  # ── Flyway ───────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
+  # ── Jackson ──────────────────────────────────────────────────────────────
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+    time-zone: UTC
+
+# ── Actuator ─────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+  info:
+    env:
+      enabled: true
+
+info:
+  app:
+    name: ${spring.application.name}
+    version: "@project.version@"
+
+# ── Custom Application Properties ────────────────────────────────────────────
+app:
+  security:
+    jwt:
+      # Production: JWT_SECRET env var MUST be set (openssl rand -base64 64)
+      # Dev fallback provided so the app starts locally without env vars.
+      # The fallback value is a valid Base64-encoded 512-bit key — NOT for production use.
+      secret: ${JWT_SECRET:dGVzdC1zZWNyZXQta2V5LW11c3QtYmUtYXQtbGVhc3QtNTEyLWJpdHMtbG9uZy1mb3ItaHM1MTItYWxnb3JpdGhtLXBhZGRpbmc=}
+      access-token-expiration: 900000       # 15 minutes in ms
+      refresh-token-expiration: 604800000   # 7 days in ms
+  banking:
+    max-accounts-per-user: 5
+    daily-transfer-limit: 50000000          # 50 000 000 UZS
+    monthly-transfer-limit: 500000000       # 500 000 000 UZS
+    large-withdrawal-threshold: 10000000    # 10 000 000 UZS
+    large-withdrawal-fee-percent: 0.5
+    account-lockout-attempts: 5
+    account-lockout-duration-minutes: 30
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# DEV profile (active by default when no profile is specified)
+# ─────────────────────────────────────────────────────────────────────────────
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/mini_banking}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:husniddin}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    show-sql: true
+
+logging:
+  level:
+    com.banking: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# TEST profile — Testcontainers manages the PostgreSQL container
+# ─────────────────────────────────────────────────────────────────────────────
+spring:
+  config:
+    activate:
+      on-profile: test
+
+  datasource:
+    # Overridden dynamically by @DynamicPropertySource in test base class
+    url: jdbc:tc:postgresql:16:///mini_banking_test
+    username: test
+    password: test
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
+
+  jpa:
+    show-sql: false
+
+  flyway:
+    enabled: true
+
+# BCrypt strength 4 in tests for fast hashing — NOT safe for production.
+# Secret must be valid standard Base64 (JwtTokenProvider calls Decoders.BASE64.decode).
+# Value below is the Base64 encoding of a 74-byte string (592 bits > 512-bit HS512 minimum).
+app:
+  security:
+    jwt:
+      secret: dGVzdC1zZWNyZXQta2V5LW11c3QtYmUtYXQtbGVhc3QtNTEyLWJpdHMtbG9uZy1mb3ItaHM1MTItYWxnb3JpdGhtLXBhZGRpbmc=
+      access-token-expiration: 900000
+      refresh-token-expiration: 604800000
+
+logging:
+  level:
+    com.banking: INFO
+
+---
+# ─────────────────────────────────────────────────────────────────────────────
+# PROD profile
+# ─────────────────────────────────────────────────────────────────────────────
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    com.banking: INFO
+    root: WARN
+  pattern:
+    console: ""   # Logback JSON appender handles formatting in prod

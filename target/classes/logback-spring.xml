@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logback configuration for Mini Banking API.
+
+  Profiles:
+    default (dev) — colored console output, DEBUG level for com.banking
+    prod          — structured JSON output to stdout (consumed by log aggregators)
+
+  MDC fields included in every log line:
+    userId     — set by JwtAuthenticationFilter on authenticated requests
+    requestId  — set by JwtAuthenticationFilter (from X-Request-ID or random UUID)
+-->
+<configuration>
+
+    <!-- ── Dev / Default profile: colored console ─────────────────────────── -->
+    <springProfile name="!prod">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>
+                    %cyan(%d{yyyy-MM-dd HH:mm:ss.SSS}) %gray([%thread]) %highlight(%-5level) %boldGreen(%logger{36}) %gray([userId=%X{userId:-anonymous} requestId=%X{requestId:-none}]) - %msg%n
+                </pattern>
+            </encoder>
+        </appender>
+
+        <root level="WARN">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+
+        <!-- Application classes at DEBUG in dev -->
+        <logger name="com.banking" level="DEBUG" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+        </logger>
+
+        <!-- Reduce noise from framework internals in dev -->
+        <logger name="org.springframework.security" level="DEBUG" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+        </logger>
+        <logger name="org.hibernate.SQL" level="DEBUG" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+        </logger>
+    </springProfile>
+
+    <!-- ── Prod profile: structured JSON to stdout ────────────────────────── -->
+    <springProfile name="prod">
+        <!--
+          JSON layout requires logstash-logback-encoder.
+          If not available, fall back to plain console with structured pattern.
+          For production deployments, add the dependency or use a log shipper.
+        -->
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <!--
+                  Structured format for log aggregators (ELK, Loki, Datadog).
+                  Each field is a separate JSON key for easy filtering.
+                -->
+                <pattern>
+                    {"timestamp":"%d{yyyy-MM-ddTHH:mm:ss.SSSZ}","level":"%-5level","logger":"%logger{36}","userId":"%X{userId:-anonymous}","requestId":"%X{requestId:-none}","thread":"%thread","message":"%message","exception":"%ex{short}"}%n
+                </pattern>
+            </encoder>
+        </appender>
+
+        <root level="WARN">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </root>
+
+        <!-- Application classes at INFO in prod — DEBUG is too verbose -->
+        <logger name="com.banking" level="INFO" additivity="false">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </logger>
+
+        <!-- Suppress noisy framework loggers in prod -->
+        <logger name="org.springframework" level="WARN"/>
+        <logger name="org.hibernate" level="WARN"/>
+        <logger name="com.zaxxer.hikari" level="WARN"/>
+    </springProfile>
+
+</configuration>

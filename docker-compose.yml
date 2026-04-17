@@ -1,0 +1,74 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mini Banking API — Docker Compose
+#
+# Usage:
+#   cp .env.example .env        # configure secrets
+#   docker compose up -d        # start all services
+#   docker compose logs -f app  # follow app logs
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL 16 ──────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: mini_banking_postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-mini_banking}
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - banking_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-mini_banking}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── Spring Boot Application ────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mini_banking_app
+    environment:
+      # Database — injected from .env
+      DB_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-mini_banking}
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD}
+      # JWT — must be a Base64-encoded 512-bit (64-byte) secret
+      JWT_SECRET: ${JWT_SECRET}
+      # Spring profile — use prod for production
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    networks:
+      - banking_net
+    # App must not start until Postgres is healthy (Flyway migrations need the DB)
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # Resource limits — prevent runaway memory usage in shared environments
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  banking_net:
+    driver: bridge
+    # Isolated network — services not in this network cannot reach the DB directly
