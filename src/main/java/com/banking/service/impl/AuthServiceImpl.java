@@ -9,6 +9,7 @@ import com.banking.dto.response.AuthResponse;
 import com.banking.dto.response.UserResponse;
 import com.banking.entity.RefreshToken;
 import com.banking.entity.User;
+import com.banking.enums.AuditAction;
 import com.banking.exception.BankingException;
 import com.banking.exception.DuplicateResourceException;
 import com.banking.exception.ResourceNotFoundException;
@@ -133,7 +134,7 @@ public class AuthServiceImpl implements AuthService {
             refreshTokenRepository.save(refreshToken);
 
             auditLogService.logSuccess(
-                userDetails.getUserId().toString(), "LOGIN", "User",
+                userDetails.getUserId().toString(), AuditAction.LOGIN.name(), "User",
                 userDetails.getUserId().toString(), ipAddress, userAgent, null
             );
 
@@ -250,7 +251,7 @@ public class AuthServiceImpl implements AuthService {
         log.debug("Failed login recorded for userId={}, threshold={}", user.getId(), threshold);
 
         auditLogService.logFailure(
-            user.getId().toString(), "LOGIN", "User",
+            user.getId().toString(), AuditAction.LOGIN.name(), "User",
             user.getId().toString(), ipAddress, userAgent, null, reason
         );
     }

@@ -22,6 +22,11 @@ spring:
       max-file-size: 1MB
       max-request-size: 1MB
 
+  data:
+    web:
+      pageable:
+        max-page-size: 100
+
   # Default profile when no SPRING_PROFILES_ACTIVE env var is set
   profiles:
     active: dev
@@ -83,6 +88,9 @@ app:
       refresh-token-expiration: 604800000   # 7 days in ms
       issuer: mini-banking-api
       audience: mini-banking-app
+    cors-allowed-origins:
+      - "http://localhost:5173"
+      - "http://localhost:3000"
   banking:
     max-accounts-per-user: 5
     daily-transfer-limit: 50000000          # 50 000 000 UZS
@@ -180,6 +188,11 @@ spring:
 
   jpa:
     show-sql: false
+
+app:
+  security:
+    cors-allowed-origins:
+      - "${CORS_ALLOWED_ORIGIN}"   # e.g. https://app.yourdomain.com
 
 logging:
   level:

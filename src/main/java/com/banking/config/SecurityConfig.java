@@ -22,6 +22,11 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 /**
  * Spring Security 6 configuration using the lambda DSL.
@@ -47,6 +52,7 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final UserDetailsService userDetailsService;
+    private final ApplicationProperties properties;
 
     /** Public endpoints that bypass JWT validation entirely. */
     private static final String[] PUBLIC_URLS = {
@@ -72,6 +78,10 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         return http
+            // CORS must be configured before CSRF/auth filters so preflight OPTIONS
+            // requests get the Allow-Origin header without requiring a JWT token.
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
             // CSRF disabled: stateless JWT; no session cookies that CSRF could exploit
             .csrf(AbstractHttpConfigurer::disable)
 
@@ -155,5 +165,21 @@ public class SecurityConfig {
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder(12);
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(properties.getSecurity().getCorsAllowedOrigins());
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+        config.setAllowedHeaders(List.of(
+            "Authorization", "Content-Type", "X-Idempotency-Key", "Accept"
+        ));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", config);
+        return source;
     }
 }

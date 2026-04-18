@@ -22,6 +22,22 @@ Authorization: Bearer <accessToken>
 
 ---
 
+## Rate Limiting
+
+All requests are rate-limited per IP address:
+
+| Endpoint group | Limit |
+|----------------|-------|
+| `/api/v1/auth/**` | **10 requests / minute** |
+| All other endpoints | **100 requests / minute** |
+
+Exceeding the limit returns `429 Too Many Requests`:
+```json
+{"status":429,"error":"Too Many Requests","message":"Rate limit exceeded. Try again later."}
+```
+
+---
+
 ## Response Envelope
 
 Every successful response is wrapped:
@@ -165,7 +181,7 @@ Authenticate and receive JWT tokens.
 
 **Error codes:** `400` validation, `401` invalid credentials, `423` account locked (after 5 failed attempts, locked for 30 min)
 
-> Note: Error messages are intentionally generic — the API does not distinguish "user not found" from "wrong password" to prevent username enumeration.
+> **Security note:** Error messages are intentionally generic — the API does not distinguish "user not found" from "wrong password" to prevent username enumeration.
 
 ---
 
@@ -355,9 +371,10 @@ Close an account (soft delete — sets status to `CLOSED`).
 }
 ```
 
-**Error codes:** `404` not found, `403` unauthorized, `422` account already closed or has non-zero balance
+**Error codes:** `404` not found, `403` unauthorized, `422` account already closed, non-zero balance, or pending transactions
 
 > Accounts with remaining balance must have all funds withdrawn or transferred first.
+> Accounts with unsettled (pending) transactions cannot be closed until they settle.
 
 ---
 
@@ -382,10 +399,10 @@ Deposit funds into an account.
 | Field | Type | Required | Rules |
 |-------|------|----------|-------|
 | `accountId` | UUID | Yes | Must belong to authenticated user |
-| `amount` | decimal | Yes | Greater than 0.0001 |
+| `amount` | decimal | Yes | `0.0001` – `1,000,000,000` |
 | `description` | string | No | Max 255 chars |
 
-**Response `201 Created`:**
+**Response `200 OK`:**
 ```json
 {
   "success": true,
@@ -426,11 +443,15 @@ Withdraw funds from an account.
 }
 ```
 
-Same field rules as deposit. `accountId` must belong to authenticated user.
+| Field | Type | Required | Rules |
+|-------|------|----------|-------|
+| `accountId` | UUID | Yes | Must belong to authenticated user |
+| `amount` | decimal | Yes | `0.0001` – `1,000,000,000` |
+| `description` | string | No | Max 255 chars |
 
-**Fee policy:** Withdrawals above **10,000,000 UZS** incur a **0.5% fee** deducted from the account.
+**Fee policy:** Withdrawals above **10,000,000 UZS** incur a fee (default **0.5%**) deducted from the account balance in addition to the withdrawal amount.
 
-**Response `201 Created`:** `TransactionResponse` with `sourceAccountId`, `balanceBeforeSource`, `balanceAfterSource` populated.
+**Response `200 OK`:** `TransactionResponse` with `sourceAccountId`, `balanceBeforeSource`, `balanceAfterSource`, and `fee` populated.
 
 **Error codes:** `400` validation, `403` unauthorized, `422` insufficient funds / account not active
 
@@ -442,9 +463,13 @@ Transfer funds between two accounts.
 **Auth required:** Yes
 
 **Headers:**
-```
-X-Idempotency-Key: <unique-string>   (optional, recommended for retries)
-```
+
+| Header | Required | Format | Description |
+|--------|----------|--------|-------------|
+| `X-Idempotency-Key` | **Yes** | UUID (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`) | Safe-retry guarantee — resubmitting the same key returns the original result without re-processing |
+
+> If the header is missing, the server returns `400 Bad Request`.
+> If the value is not a valid UUID, the server returns `422 Unprocessable Entity`.
 
 **Request body:**
 ```json
@@ -460,24 +485,29 @@ X-Idempotency-Key: <unique-string>   (optional, recommended for retries)
 |-------|------|----------|-------|
 | `sourceAccountId` | UUID | Yes | Must belong to authenticated user |
 | `targetAccountId` | UUID | Yes | Can belong to any user |
-| `amount` | decimal | Yes | Greater than 0.0001 |
+| `amount` | decimal | Yes | `0.0001` – `500,000,000` |
 | `description` | string | No | Max 255 chars |
 
-**Limits (per source account):**
-- Daily limit: **50,000,000 UZS**
-- Monthly limit: **500,000,000 UZS**
+**Limits (per source account, rolling window in UTC):**
+
+| Window | Limit |
+|--------|-------|
+| Daily | **50,000,000 UZS** |
+| Monthly | **500,000,000 UZS** |
 
 **Fee:** No fee for same-currency internal transfers.
 
-**Idempotency:** If `X-Idempotency-Key` is provided and the same key was used before, the original result is returned without re-processing.
+**Idempotency behaviour:**
+- Same key + same parameters → original `TransactionResponse` returned immediately
+- Same key + different parameters → `422` idempotency key conflict
 
-**Response `201 Created`:** Full `TransactionResponse` with both source and target balance snapshots.
+**Response `200 OK`:** Full `TransactionResponse` with both source and target balance snapshots.
 
 **Error codes:**
-- `400` validation / same source and target
+- `400` validation, missing `X-Idempotency-Key` header
 - `403` source account not owned by user
-- `422` insufficient funds, account not active, cross-currency transfer, daily/monthly limit exceeded
-- `409` concurrent modification (retry the request)
+- `409` concurrent modification (optimistic lock — safe to retry with a **new** idempotency key)
+- `422` insufficient funds, account not active, cross-currency transfer, daily/monthly limit exceeded, same source/target, idempotency key conflict, invalid key format
 
 ---
 
@@ -490,11 +520,11 @@ Get paginated transaction history for an account.
 
 **Query params:**
 
-| Param | Default | Description |
-|-------|---------|-------------|
-| `page` | `0` | Page index (0-based) |
-| `size` | `10` | Items per page |
-| `sort` | `createdAt,desc` | Sort field and direction |
+| Param | Default | Max | Description |
+|-------|---------|-----|-------------|
+| `page` | `0` | — | Page index (0-based) |
+| `size` | `10` | **100** | Items per page |
+| `sort` | `createdAt,desc` | — | Sort field and direction |
 
 **Example:** `GET /transactions/uuid/history?page=0&size=20&sort=processedAt,desc`
 
@@ -525,13 +555,14 @@ Get paginated transaction history for an account.
 |--------|---------|
 | `200` | OK |
 | `201` | Created (new resource) |
-| `400` | Validation error |
+| `400` | Validation error or missing required header |
 | `401` | Missing/expired/invalid token |
 | `403` | Authenticated but not authorized for this resource |
 | `404` | Resource not found |
-| `409` | Conflict (concurrent modification — retry) |
+| `409` | Conflict (concurrent modification — retry with a new idempotency key) |
 | `422` | Business rule violation |
 | `423` | Account locked (too many failed logins) |
+| `429` | Rate limit exceeded |
 | `500` | Unexpected server error |
 
 ---
@@ -551,7 +582,13 @@ All monetary amounts use up to 4 decimal places (e.g. `500000.0000`). Display wi
 Account numbers are 16-digit strings starting with `8600`. Display with spaces for readability: `8600 1234 5678 9012`.
 
 **5. Pagination**
-The history endpoint returns Spring's `Page<T>` object. Use `content` for the rows and `totalPages`/`totalElements` for pagination UI.
+The history endpoint returns Spring's `Page<T>` object. Use `content` for the rows and `totalPages`/`totalElements` for pagination UI. Maximum page size is **100**.
 
-**6. Idempotency keys**
-For transfers, generate a UUID client-side and include it as `X-Idempotency-Key`. On network timeout/retry, use the same key — the server guarantees exactly-once execution.
+**6. Idempotency keys for transfers**
+Generate a UUID client-side (`crypto.randomUUID()`) and include it as `X-Idempotency-Key`. The header is **required**. On network timeout or retry, reuse the **same** key — the server guarantees exactly-once execution. On a new transfer, generate a **new** key.
+
+**7. Rate limiting**
+Auth endpoints allow 10 requests/minute per IP. Build exponential back-off when you receive `429` — do not hammer the login endpoint on failures.
+
+**8. Concurrent modification (409)**
+A `409` on transfer means two requests touched the same account simultaneously. Retry the request once with a **new** `X-Idempotency-Key` after a short delay (~200ms).

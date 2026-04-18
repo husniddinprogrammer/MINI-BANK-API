@@ -9,6 +9,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 /**
  * Strongly-typed configuration properties bound from the {@code app.*} namespace.
@@ -45,12 +46,16 @@ public class ApplicationProperties {
         @NotNull
         private Jwt jwt = new Jwt();
 
+        /** Allowed CORS origins — set per-profile in application.yml. */
+        @NotNull
+        private List<String> corsAllowedOrigins = List.of();
+
         @Getter
         @Setter
         public static class Jwt {
 
             /** HMAC-SHA512 signing secret — must be ≥ 512 bits (64 bytes). */
-            @NotBlank
+            @NotBlank(message = "JWT_SECRET environment variable must be set")
             private String secret;
 
             /** Access token TTL in milliseconds (default: 900000 = 15 min). */
@@ -89,7 +94,8 @@ public class ApplicationProperties {
         @NotNull
         private BigDecimal largeWithdrawalThreshold = new BigDecimal("10000000");
 
-        private double largeWithdrawalFeePercent = 0.5;
+        @NotNull
+        private BigDecimal largeWithdrawalFeePercent = new BigDecimal("0.5");
 
         @Min(1)
         private int accountLockoutAttempts = 5;

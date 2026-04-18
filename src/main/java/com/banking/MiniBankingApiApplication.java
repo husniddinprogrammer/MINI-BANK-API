@@ -4,6 +4,9 @@ import com.banking.config.ApplicationProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.data.web.config.EnableSpringDataWebSupport;
+
+import static org.springframework.data.web.config.EnableSpringDataWebSupport.PageSerializationMode.VIA_DTO;
 
 /**
  * Entry point for the Mini Banking REST API.
@@ -17,6 +20,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  */
 @SpringBootApplication
 @EnableConfigurationProperties(ApplicationProperties.class)
+@EnableSpringDataWebSupport(pageSerializationMode = VIA_DTO)
 public class MiniBankingApiApplication {
 
     /**

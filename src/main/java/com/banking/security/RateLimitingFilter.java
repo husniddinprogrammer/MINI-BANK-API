@@ -17,23 +17,23 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * IP-based rate limiter that runs before authentication.
  *
- * <p>Enforces a maximum of 100 requests per minute per IP address using the
- * token-bucket algorithm (Bucket4j). Requests exceeding the limit receive a
- * 429 Too Many Requests response immediately, without reaching JWT validation
- * or any business logic.
+ * <p>Enforces two tiers:
+ * <ul>
+ *   <li>Auth endpoints ({@code /api/v1/auth/**}): 10 requests/minute — reduces brute-force risk.</li>
+ *   <li>All other endpoints: 100 requests/minute — general DoS protection.</li>
+ * </ul>
  *
- * <p>Security rationale: HMAC-SHA512 computation on every request is CPU-intensive.
- * Without rate limiting, an attacker can exhaust server CPU by flooding with
- * crafted tokens. 10,000 bad tokens/sec would saturate CPU without this filter.
+ * <p>X-Forwarded-For is only trusted when the direct TCP peer ({@code RemoteAddr}) is in
+ * {@link #TRUSTED_PROXIES}. Clients cannot spoof their IP by setting the header themselves.
  *
- * <p><strong>Production note:</strong> The in-memory {@link ConcurrentHashMap} works
- * for a single instance. In a multi-node deployment, replace with a Redis-backed
- * bucket store (bucket4j-redis) to share state across all nodes.
+ * <p><strong>Production note:</strong> Replace the in-memory {@link ConcurrentHashMap} with a
+ * Redis-backed bucket store (bucket4j-redis) for multi-node deployments.
  *
  * @author Mini Banking API
  * @version 1.0
@@ -43,11 +43,19 @@ import java.util.concurrent.ConcurrentHashMap;
 @Order(1)
 public class RateLimitingFilter extends OncePerRequestFilter {
 
-    private static final int REQUESTS_PER_MINUTE = 100;
+    private static final int AUTH_REQUESTS_PER_MINUTE = 10;
+    private static final int DEFAULT_REQUESTS_PER_MINUTE = 100;
+    private static final String AUTH_PATH_PREFIX = "/api/v1/auth/";
 
-    // IP → token bucket; entries are created lazily on first request from each IP.
-    // PRODUCTION: replace with Redis-backed distributed store.
-    private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
+    // Only trust X-Forwarded-For when the direct connection comes from a known proxy.
+    // In production, set this to your load balancer / reverse proxy IP(s).
+    private static final Set<String> TRUSTED_PROXIES = Set.of(
+        "127.0.0.1",
+        "::1"
+    );
+
+    private final Map<String, Bucket> authBuckets = new ConcurrentHashMap<>();
+    private final Map<String, Bucket> defaultBuckets = new ConcurrentHashMap<>();
 
     @Override
     protected void doFilterInternal(
@@ -57,13 +65,16 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
 
         String ip = extractClientIp(request);
-        Bucket bucket = buckets.computeIfAbsent(ip, k -> createBucket());
+        boolean isAuthEndpoint = request.getRequestURI().startsWith(AUTH_PATH_PREFIX);
+
+        Bucket bucket = isAuthEndpoint
+            ? authBuckets.computeIfAbsent(ip, k -> createBucket(AUTH_REQUESTS_PER_MINUTE))
+            : defaultBuckets.computeIfAbsent(ip, k -> createBucket(DEFAULT_REQUESTS_PER_MINUTE));
 
         if (bucket.tryConsume(1)) {
             chain.doFilter(request, response);
         } else {
-            log.warn("Rate limit exceeded for IP={}", ip);
-            // SECURITY: Return 429, not 401/403 — don't reveal auth details to rate-limited clients.
+            log.warn("Rate limit exceeded for IP={}, endpoint={}", ip, request.getRequestURI());
             response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
             response.getWriter().write("""
@@ -72,22 +83,25 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         }
     }
 
-    private Bucket createBucket() {
+    private Bucket createBucket(int requestsPerMinute) {
         return Bucket.builder()
             .addLimit(Bandwidth.classic(
-                REQUESTS_PER_MINUTE,
-                Refill.intervally(REQUESTS_PER_MINUTE, Duration.ofMinutes(1))
+                requestsPerMinute,
+                Refill.intervally(requestsPerMinute, Duration.ofMinutes(1))
             ))
             .build();
     }
 
     private String extractClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        // SECURITY: X-Forwarded-For can be spoofed by clients.
-        // In production, validate that the XFF header originates from a trusted proxy IP.
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
+        String remoteAddr = request.getRemoteAddr();
+        // SECURITY: Only honour X-Forwarded-For when the TCP peer is a known trusted proxy.
+        // If any client could set this header, they could claim any IP and bypass rate limiting.
+        if (TRUSTED_PROXIES.contains(remoteAddr)) {
+            String xff = request.getHeader("X-Forwarded-For");
+            if (xff != null && !xff.isBlank()) {
+                return xff.split(",")[0].trim();
+            }
         }
-        return request.getRemoteAddr();
+        return remoteAddr;
     }
 }

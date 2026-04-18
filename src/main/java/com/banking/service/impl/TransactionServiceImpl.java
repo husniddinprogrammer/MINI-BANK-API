@@ -9,6 +9,7 @@ import com.banking.dto.response.TransactionResponse;
 import com.banking.entity.Account;
 import com.banking.entity.Transaction;
 import com.banking.enums.AccountStatus;
+import com.banking.enums.AuditAction;
 import com.banking.enums.TransactionStatus;
 import com.banking.enums.TransactionType;
 import com.banking.exception.*;
@@ -63,7 +64,6 @@ import java.util.UUID;
 public class TransactionServiceImpl implements TransactionService {
 
     private static final DateTimeFormatter REF_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd");
-    private static final BigDecimal FEE_RATE = new BigDecimal("0.005"); // 0.5%
     private static final int MONETARY_SCALE = 4;
 
     private final TransactionRepository transactionRepository;
@@ -76,7 +76,7 @@ public class TransactionServiceImpl implements TransactionService {
      * {@inheritDoc}
      */
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public TransactionResponse deposit(DepositRequest request, UUID userId, String ipAddress, String userAgent) {
         log.debug("Processing deposit: accountId={}, amount={}", request.accountId(), request.amount());
 
@@ -107,7 +107,7 @@ public class TransactionServiceImpl implements TransactionService {
         Transaction saved = transactionRepository.save(tx);
 
         auditLogService.logSuccess(
-            userId.toString(), "DEPOSIT", "Transaction",
+            userId.toString(), AuditAction.DEPOSIT.name(), "Transaction",
             saved.getId().toString(), ipAddress, userAgent,
             String.format("{\"accountId\":\"%s\",\"amount\":\"%s\"}", request.accountId(), request.amount())
         );
@@ -121,7 +121,7 @@ public class TransactionServiceImpl implements TransactionService {
      * {@inheritDoc}
      */
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public TransactionResponse withdraw(WithdrawRequest request, UUID userId, String ipAddress, String userAgent) {
         log.debug("Processing withdrawal: accountId={}, amount={}", request.accountId(), request.amount());
 
@@ -159,7 +159,7 @@ public class TransactionServiceImpl implements TransactionService {
         Transaction saved = transactionRepository.save(tx);
 
         auditLogService.logSuccess(
-            userId.toString(), "WITHDRAWAL", "Transaction",
+            userId.toString(), AuditAction.WITHDRAWAL.name(), "Transaction",
             saved.getId().toString(), ipAddress, userAgent,
             String.format("{\"accountId\":\"%s\",\"amount\":\"%s\",\"fee\":\"%s\"}",
                 request.accountId(), request.amount(), fee)
@@ -307,7 +307,7 @@ public class TransactionServiceImpl implements TransactionService {
         Transaction saved = transactionRepository.save(tx);
 
         auditLogService.logSuccess(
-            userId.toString(), "TRANSFER", "Transaction",
+            userId.toString(), AuditAction.TRANSFER.name(), "Transaction",
             saved.getId().toString(), ipAddress, userAgent,
             String.format("{\"source\":\"%s\",\"target\":\"%s\",\"amount\":\"%s\"}",
                 request.sourceAccountId(), request.targetAccountId(), request.amount())
@@ -352,7 +352,7 @@ public class TransactionServiceImpl implements TransactionService {
     }
 
     private void checkDailyLimit(UUID accountId, BigDecimal amount) {
-        LocalDateTime startOfDay = LocalDateTime.now(ZoneOffset.UTC).toLocalDate().atStartOfDay();
+        LocalDateTime startOfDay = LocalDateTime.now(ZoneOffset.UTC).toLocalDate().atStartOfDay(ZoneOffset.UTC).toLocalDateTime();
         LocalDateTime endOfDay = startOfDay.plusDays(1).minusNanos(1);
 
         BigDecimal dailyUsed = transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
@@ -366,7 +366,7 @@ public class TransactionServiceImpl implements TransactionService {
     }
 
     private void checkMonthlyLimit(UUID accountId, BigDecimal amount) {
-        LocalDateTime startOfMonth = LocalDateTime.now(ZoneOffset.UTC).toLocalDate().withDayOfMonth(1).atStartOfDay();
+        LocalDateTime startOfMonth = LocalDateTime.now(ZoneOffset.UTC).toLocalDate().withDayOfMonth(1).atStartOfDay(ZoneOffset.UTC).toLocalDateTime();
         LocalDateTime endOfMonth = startOfMonth.plusMonths(1).minusNanos(1);
 
         BigDecimal monthlyUsed = transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
@@ -381,7 +381,7 @@ public class TransactionServiceImpl implements TransactionService {
 
     /**
      * Calculates withdrawal fee.
-     * Amounts exceeding the large-withdrawal threshold incur a 0.5% fee.
+     * Amounts exceeding the large-withdrawal threshold incur a fee defined in configuration.
      */
     private BigDecimal calculateWithdrawalFee(BigDecimal amount) {
         BigDecimal threshold = properties.getBanking().getLargeWithdrawalThreshold();
@@ -389,7 +389,9 @@ public class TransactionServiceImpl implements TransactionService {
             // FINANCE: HALF_EVEN (Banker's Rounding) is the IEEE 754 standard for financial
             // calculations. HALF_UP introduces systematic upward bias — over millions of
             // transactions this causes measurable discrepancy in bank ledgers.
-            return amount.multiply(FEE_RATE).setScale(MONETARY_SCALE, RoundingMode.HALF_EVEN);
+            BigDecimal feeRate = properties.getBanking().getLargeWithdrawalFeePercent()
+                .divide(BigDecimal.valueOf(100), 10, RoundingMode.HALF_EVEN);
+            return amount.multiply(feeRate).setScale(MONETARY_SCALE, RoundingMode.HALF_EVEN);
         }
         return BigDecimal.ZERO;
     }

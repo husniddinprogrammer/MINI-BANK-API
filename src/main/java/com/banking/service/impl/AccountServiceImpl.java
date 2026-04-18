@@ -7,6 +7,7 @@ import com.banking.dto.response.AccountResponse;
 import com.banking.entity.Account;
 import com.banking.entity.User;
 import com.banking.enums.AccountStatus;
+import com.banking.enums.AuditAction;
 import com.banking.exception.BankingException;
 import com.banking.exception.ResourceNotFoundException;
 import com.banking.exception.UnauthorizedAccessException;
@@ -63,7 +64,7 @@ public class AccountServiceImpl implements AccountService {
      */
     @Override
     @Transactional
-    public AccountResponse createAccount(CreateAccountRequest request, UUID userId) {
+    public AccountResponse createAccount(CreateAccountRequest request, UUID userId, String ipAddress, String userAgent) {
         log.debug("Creating account for userId={}, type={}", userId, request.accountType());
 
         User owner = userRepository.findById(userId)
@@ -106,8 +107,8 @@ public class AccountServiceImpl implements AccountService {
         Account saved = requireNonNull(accountRepository.save(account));
 
         auditLogService.logSuccess(
-            userId.toString(), "ACCOUNT_CREATED", "Account",
-            saved.getId().toString(), null, null,
+            userId.toString(), AuditAction.ACCOUNT_CREATED.name(), "Account",
+            saved.getId().toString(), ipAddress, userAgent,
             String.format("{\"accountType\":\"%s\",\"currency\":\"%s\"}",
                 request.accountType(), request.currency())
         );
@@ -148,7 +149,7 @@ public class AccountServiceImpl implements AccountService {
      */
     @Override
     @Transactional
-    public void closeAccount(UUID accountId, UUID userId) {
+    public void closeAccount(UUID accountId, UUID userId, String ipAddress, String userAgent) {
         log.debug("Closing account: accountId={}, userId={}", accountId, userId);
 
         Account account = findAndVerifyOwnership(accountId, userId);
@@ -177,8 +178,8 @@ public class AccountServiceImpl implements AccountService {
         accountRepository.save(account);
 
         auditLogService.logSuccess(
-            userId.toString(), "ACCOUNT_CLOSED", "Account",
-            accountId.toString(), null, null, null
+            userId.toString(), AuditAction.ACCOUNT_CLOSED.name(), "Account",
+            accountId.toString(), ipAddress, userAgent, null
         );
 
         log.info("Account closed: accountId={}, userId={}", accountId, userId);

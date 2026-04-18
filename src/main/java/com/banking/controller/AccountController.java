@@ -8,6 +8,7 @@ import com.banking.service.AccountService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -48,10 +49,13 @@ public class AccountController {
     @PostMapping
     @Operation(summary = "Create a new account")
     public ResponseEntity<ApiResponse<AccountResponse>> createAccount(
-        @Valid @RequestBody CreateAccountRequest request
+        @Valid @RequestBody CreateAccountRequest request,
+        HttpServletRequest httpRequest
     ) {
         UUID userId = SecurityUtils.getCurrentUserId();
-        AccountResponse account = accountService.createAccount(request, userId);
+        String ip = httpRequest.getRemoteAddr();
+        String ua = httpRequest.getHeader("User-Agent");
+        AccountResponse account = accountService.createAccount(request, userId, ip, ua);
         return ResponseEntity.status(HttpStatus.CREATED)
             .body(ApiResponse.success("Account created successfully", account));
     }
@@ -92,9 +96,14 @@ public class AccountController {
      */
     @DeleteMapping("/{id}")
     @Operation(summary = "Close an account (soft delete)")
-    public ResponseEntity<ApiResponse<Void>> closeAccount(@PathVariable UUID id) {
+    public ResponseEntity<ApiResponse<Void>> closeAccount(
+        @PathVariable UUID id,
+        HttpServletRequest httpRequest
+    ) {
         UUID userId = SecurityUtils.getCurrentUserId();
-        accountService.closeAccount(id, userId);
+        String ip = httpRequest.getRemoteAddr();
+        String ua = httpRequest.getHeader("User-Agent");
+        accountService.closeAccount(id, userId, ip, ua);
         return ResponseEntity.ok(ApiResponse.success("Account closed successfully"));
     }
 }
