@@ -1,0 +1,15 @@
+com\banking\service\AuthServiceImplTest.class
+com\banking\service\AuthServiceImplTest$Register.class
+com\banking\integration\TransferIntegrationTest.class
+com\banking\service\AccountServiceImplTest$GetAccountsByUserId.class
+com\banking\service\TransactionServiceImplTest$Transfer.class
+com\banking\controller\TransactionControllerTest.class
+com\banking\service\TransactionServiceImplTest.class
+com\banking\service\AccountServiceImplTest.class
+com\banking\service\AuthServiceImplTest$Login.class
+com\banking\security\JwtTokenProviderTest.class
+com\banking\service\AccountServiceImplTest$CloseAccount.class
+com\banking\service\AccountServiceImplTest$CreateAccount.class
+com\banking\service\AccountServiceImplTest$GetAccountById.class
+com\banking\service\AuthServiceImplTest$Logout.class
+com\banking\controller\AuthControllerTest.class

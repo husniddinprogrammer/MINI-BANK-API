@@ -6,9 +6,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
@@ -93,6 +97,25 @@ public class GlobalExceptionHandler {
         return problem;
     }
 
+    // ── Request binding exceptions ───────────────────────────────────────────
+
+    /**
+     * Handles missing required request headers (e.g. X-Idempotency-Key).
+     *
+     * @param ex the missing header exception
+     * @return 400 problem detail
+     */
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    public ProblemDetail handleMissingRequestHeaderException(MissingRequestHeaderException ex) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+            HttpStatus.BAD_REQUEST,
+            String.format("Required request header '%s' is not present", ex.getHeaderName()));
+        problem.setType(URI.create(BASE_TYPE_URI + "missing-header"));
+        problem.setTitle("Missing Request Header");
+        problem.setProperty(TIMESTAMP_KEY, Instant.now());
+        return problem;
+    }
+
     // ── Concurrency exceptions ───────────────────────────────────────────────
 
     /**
@@ -141,6 +164,16 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(AccessDeniedException.class)
     public ProblemDetail handleAccessDeniedException(AccessDeniedException ex) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth instanceof AnonymousAuthenticationToken) {
+            // Unauthenticated user — 401 so client knows it must log in first
+            ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.UNAUTHORIZED, "Authentication required");
+            problem.setType(URI.create(BASE_TYPE_URI + "authentication-error"));
+            problem.setTitle("Unauthorized");
+            problem.setProperty(TIMESTAMP_KEY, Instant.now());
+            return problem;
+        }
         log.warn("Access denied: {}", ex.getMessage());
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
             HttpStatus.FORBIDDEN, "You do not have permission to perform this action");

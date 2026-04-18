@@ -81,4 +81,45 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     @Transactional
     @Query("UPDATE User u SET u.accountNonLocked = FALSE, u.lockedUntil = :lockedUntil WHERE u.id = :userId")
     void lockUser(@Param("userId") UUID userId, @Param("lockedUntil") LocalDateTime lockedUntil);
+
+    /**
+     * Returns the current failed login attempt count directly from the DB.
+     * Used after {@link #incrementFailedLoginAttempts} to avoid stale in-memory reads.
+     *
+     * @param userId the user's UUID
+     * @return current failed attempt count
+     */
+    @Query("SELECT u.failedLoginAttempts FROM User u WHERE u.id = :userId")
+    int getFailedLoginAttempts(@Param("userId") UUID userId);
+
+    /**
+     * Atomically increments the failed login counter and locks the account in one UPDATE
+     * if the new count reaches the threshold.
+     *
+     * <p>A single SQL UPDATE eliminates the read-then-write race where two concurrent
+     * login attempts could both read the same pre-increment value, each decide the
+     * threshold is not yet reached, and both avoid locking the account (TOCTOU).
+     *
+     * @param userId    the user's UUID
+     * @param threshold lock the account when failedLoginAttempts reaches this value
+     * @param lockUntil timestamp after which the timed lockout expires
+     */
+    @Modifying
+    @Transactional
+    @Query("""
+        UPDATE User u SET
+          u.failedLoginAttempts = u.failedLoginAttempts + 1,
+          u.accountNonLocked = CASE
+              WHEN u.failedLoginAttempts + 1 >= :threshold
+              THEN FALSE ELSE u.accountNonLocked END,
+          u.lockedUntil = CASE
+              WHEN u.failedLoginAttempts + 1 >= :threshold
+              THEN :lockUntil ELSE u.lockedUntil END
+        WHERE u.id = :userId
+        """)
+    void incrementFailedAttemptsAndLockIfThreshold(
+        @Param("userId") UUID userId,
+        @Param("threshold") int threshold,
+        @Param("lockUntil") LocalDateTime lockUntil
+    );
 }

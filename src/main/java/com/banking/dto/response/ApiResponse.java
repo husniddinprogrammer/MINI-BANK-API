@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Generic API response envelope wrapping all endpoints' responses.
@@ -48,7 +49,7 @@ public record ApiResponse<T>(
             .success(true)
             .message(message)
             .data(data)
-            .timestamp(LocalDateTime.now())
+            .timestamp(LocalDateTime.now(ZoneOffset.UTC))
             .build();
     }
 
@@ -63,22 +64,8 @@ public record ApiResponse<T>(
         return ApiResponse.<T>builder()
             .success(true)
             .message(message)
-            .timestamp(LocalDateTime.now())
+            .timestamp(LocalDateTime.now(ZoneOffset.UTC))
             .build();
     }
 
-    /**
-     * Convenience factory for error responses (used by exception handler).
-     *
-     * @param message human-readable error description
-     * @param <T>     phantom type parameter
-     * @return wrapped error response
-     */
-    public static <T> ApiResponse<T> error(String message) {
-        return ApiResponse.<T>builder()
-            .success(false)
-            .message(message)
-            .timestamp(LocalDateTime.now())
-            .build();
-    }
 }

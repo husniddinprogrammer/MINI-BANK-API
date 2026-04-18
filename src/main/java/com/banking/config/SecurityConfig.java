@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
@@ -18,6 +19,7 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 
@@ -84,6 +86,8 @@ public class SecurityConfig {
                 .referrerPolicy(referrer ->
                     referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN)
                 )
+                // SECURITY: Prevents browsers and proxies from caching sensitive API responses.
+                .cacheControl(cache -> {})
             )
 
             // Stateless — never create or use HTTP sessions
@@ -96,6 +100,12 @@ public class SecurityConfig {
                 .requestMatchers(PUBLIC_URLS).permitAll()
                 .requestMatchers(HttpMethod.GET, "/actuator/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
+            )
+
+            // SECURITY: Return 401 (not 403) for unauthenticated requests so clients can
+            // distinguish "you need to log in" from "you are logged in but not allowed".
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
             )
 
             // Wire the JWT filter before Spring Security's own username/password filter

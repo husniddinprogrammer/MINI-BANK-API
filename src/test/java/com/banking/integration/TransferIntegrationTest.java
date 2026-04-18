@@ -1,5 +1,7 @@
 package com.banking.integration;
 
+import com.banking.dto.request.TransferRequest;
+import com.banking.dto.response.TransactionResponse;
 import com.banking.entity.Account;
 import com.banking.entity.User;
 import com.banking.enums.AccountStatus;
@@ -7,7 +9,9 @@ import com.banking.enums.AccountType;
 import com.banking.enums.Currency;
 import com.banking.enums.Role;
 import com.banking.repository.AccountRepository;
+import com.banking.repository.TransactionRepository;
 import com.banking.repository.UserRepository;
+import com.banking.service.TransactionService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -22,9 +26,14 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,7 +75,12 @@ class TransferIntegrationTest {
 
     @Autowired private UserRepository userRepository;
     @Autowired private AccountRepository accountRepository;
+    @Autowired private TransactionRepository transactionRepository;
+    @Autowired private TransactionService transactionService;
     @Autowired private PasswordEncoder passwordEncoder;
+
+    private UUID userAId;
+    private UUID userBId;
 
     private Account accountA;
     private Account accountB;
@@ -83,6 +97,7 @@ class TransferIntegrationTest {
             .phoneNumber("+998901111111")
             .role(Role.ROLE_USER)
             .build());
+        userAId = userA.getId();
 
         User userB = userRepository.save(User.builder()
             .firstName("Bob").lastName("Jones")
@@ -91,6 +106,7 @@ class TransferIntegrationTest {
             .phoneNumber("+998902222222")
             .role(Role.ROLE_USER)
             .build());
+        userBId = userB.getId();
 
         accountA = accountRepository.save(Account.builder()
             .accountNumber("8600000000000001")
@@ -156,5 +172,69 @@ class TransferIntegrationTest {
         assertThat(user.getFailedLoginAttempts()).isZero();
         assertThat(user.isAccountNonLocked()).isTrue();
         assertThat(user.isEnabled()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Duplicate idempotency key returns original result without debiting twice")
+    void shouldDeduplicateTransferWithSameIdempotencyKey() {
+        String idempotencyKey = UUID.randomUUID().toString();
+        TransferRequest request = new TransferRequest(
+            accountA.getId(), accountB.getId(), new BigDecimal("1000.0000"), "idempotency test"
+        );
+
+        TransactionResponse first  = transactionService.transfer(request, userAId, idempotencyKey, "127.0.0.1", "test-agent");
+        TransactionResponse second = transactionService.transfer(request, userAId, idempotencyKey, "127.0.0.1", "test-agent");
+
+        // Second call must return the same transaction record — not a new one
+        assertThat(second.id()).isEqualTo(first.id());
+        assertThat(second.referenceNumber()).isEqualTo(first.referenceNumber());
+
+        // Balance was deducted exactly once
+        Account updatedA = accountRepository.findById(accountA.getId()).orElseThrow();
+        assertThat(updatedA.getBalance()).isEqualByComparingTo("99000.0000");
+
+        // Only one transaction record exists for this idempotency key (stored as reference number)
+        long txCount = transactionRepository.findAll().stream()
+            .filter(tx -> ("TXN-IDMP-" + idempotencyKey).equals(tx.getReferenceNumber()))
+            .count();
+        assertThat(txCount).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Concurrent opposite-direction transfers complete without deadlock")
+    void shouldHandleConcurrentReverseTransfersWithoutDeadlock() throws Exception {
+        TransferRequest aToB = new TransferRequest(
+            accountA.getId(), accountB.getId(), new BigDecimal("10000.0000"), "A to B"
+        );
+        TransferRequest bToA = new TransferRequest(
+            accountB.getId(), accountA.getId(), new BigDecimal("10000.0000"), "B to A"
+        );
+
+        CountDownLatch startLatch = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+
+        // Both transfers start at the same instant to maximise deadlock probability
+        List<Future<TransactionResponse>> futures = List.of(
+            executor.submit((Callable<TransactionResponse>) () -> {
+                startLatch.await();
+                return transactionService.transfer(aToB, userAId, UUID.randomUUID().toString(), "127.0.0.1", "agent-a");
+            }),
+            executor.submit((Callable<TransactionResponse>) () -> {
+                startLatch.await();
+                return transactionService.transfer(bToA, userBId, UUID.randomUUID().toString(), "127.0.0.1", "agent-b");
+            })
+        );
+
+        startLatch.countDown();
+        for (Future<TransactionResponse> f : futures) {
+            f.get(15, TimeUnit.SECONDS); // deadlock would time out here
+        }
+        executor.shutdown();
+
+        // Net effect: each account transferred the same amount in both directions → balances unchanged
+        Account finalA = accountRepository.findById(accountA.getId()).orElseThrow();
+        Account finalB = accountRepository.findById(accountB.getId()).orElseThrow();
+        assertThat(finalA.getBalance()).isEqualByComparingTo("100000.0000");
+        assertThat(finalB.getBalance()).isEqualByComparingTo("100000.0000");
     }
 }

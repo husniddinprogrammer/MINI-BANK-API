@@ -88,8 +88,7 @@ class AuthServiceImplTest {
         banking.setAccountLockoutAttempts(5);
         banking.setAccountLockoutDurationMinutes(30);
 
-        given(properties.getSecurity()).willReturn(security);
-        given(properties.getBanking()).willReturn(banking);
+        // Stubs added only in the specific tests that need them (STRICT_STUBS requires no unused stubs).
     }
 
     // ── register() ────────────────────────────────────────────────────────────
@@ -169,11 +168,12 @@ class AuthServiceImplTest {
 
             UUID userId = UUID.randomUUID();
             User user = User.builder().email(TEST_EMAIL).build();
+            org.springframework.test.util.ReflectionTestUtils.setField(user, "id", userId);
             CustomUserDetails userDetails = new CustomUserDetails(user);
 
-            // Reflection trick: set id via parent class builder pattern
             var auth = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
 
+            given(properties.getSecurity()).willReturn(security);
             given(authenticationManager.authenticate(any())).willReturn(auth);
             given(jwtTokenProvider.generateAccessToken(userDetails)).willReturn("access.jwt.token");
             given(userRepository.getReferenceById(any())).willReturn(user);
@@ -198,6 +198,67 @@ class AuthServiceImplTest {
             assertThatThrownBy(() -> authService.login(request, TEST_IP, TEST_UA))
                 .isInstanceOf(BankingException.class)
                 .extracting("status").isEqualTo(HttpStatus.UNAUTHORIZED);
+        }
+
+        // ── FIX-6: Timing attack prevention ──────────────────────────────────
+
+        @Test
+        @DisplayName("FIX-6: should call passwordEncoder.encode() when email does not exist — timing equalization")
+        void shouldCallDummyHashWhenEmailNotFound() {
+            LoginRequest request = new LoginRequest("nonexistent@bank.com", "any");
+
+            given(authenticationManager.authenticate(any()))
+                .willThrow(new BadCredentialsException("Bad credentials"));
+            given(userRepository.findByEmail("nonexistent@bank.com")).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> authService.login(request, TEST_IP, TEST_UA))
+                .isInstanceOf(BankingException.class);
+
+            // Dummy BCrypt ensures response time matches the existing-email path
+            then(passwordEncoder).should().encode("dummy-timing-equalization-string");
+        }
+
+        @Test
+        @DisplayName("FIX-6: nonexistent email path throws same exception message as wrong password path")
+        void shouldThrowSameMessageWhenEmailNotFound() {
+            given(authenticationManager.authenticate(any()))
+                .willThrow(new BadCredentialsException("Bad credentials"));
+            given(userRepository.findByEmail(TEST_EMAIL)).willReturn(Optional.empty());
+
+            BankingException ex = catchThrowableOfType(
+                () -> authService.login(new LoginRequest(TEST_EMAIL, "any"), TEST_IP, TEST_UA),
+                BankingException.class);
+
+            assertThat(ex.getMessage()).isEqualTo("Invalid credentials");
+            assertThat(ex.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        }
+
+        // ── FIX-5: Atomic lockout ─────────────────────────────────────────────
+
+        @Test
+        @DisplayName("FIX-5: should call atomic incrementFailedAttemptsAndLockIfThreshold on failed login")
+        void shouldCallAtomicIncrementOnFailedLogin() {
+            LoginRequest request = new LoginRequest(TEST_EMAIL, "WrongPassword");
+            User existingUser = User.builder().email(TEST_EMAIL).build();
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                existingUser, "id", UUID.randomUUID());
+
+            given(properties.getBanking()).willReturn(banking);
+            given(authenticationManager.authenticate(any()))
+                .willThrow(new BadCredentialsException("Bad credentials"));
+            given(userRepository.findByEmail(TEST_EMAIL)).willReturn(Optional.of(existingUser));
+
+            assertThatThrownBy(() -> authService.login(request, TEST_IP, TEST_UA))
+                .isInstanceOf(BankingException.class);
+
+            // Single atomic UPDATE — not the old 3-query approach
+            then(userRepository).should().incrementFailedAttemptsAndLockIfThreshold(
+                eq(existingUser.getId()),
+                eq(5),   // threshold from banking properties
+                any()    // lockUntil timestamp
+            );
+            then(userRepository).should(never()).incrementFailedLoginAttempts(any());
+            then(userRepository).should(never()).lockUser(any(), any());
         }
     }
 

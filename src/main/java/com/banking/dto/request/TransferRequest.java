@@ -1,5 +1,6 @@
 package com.banking.dto.request;
 
+import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -31,6 +32,7 @@ public record TransferRequest(
 
     @NotNull(message = "Amount is required")
     @DecimalMin(value = "0.0001", message = "Transfer amount must be greater than zero")
+    @DecimalMax(value = "500000000", message = "Transfer amount must not exceed the monthly limit of 500,000,000")
     BigDecimal amount,
 
     @Size(max = 255, message = "Description must not exceed 255 characters")

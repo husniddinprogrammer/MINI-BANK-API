@@ -60,6 +60,14 @@ public class ApplicationProperties {
             /** Refresh token TTL in milliseconds (default: 604800000 = 7 days). */
             @Min(3600000)
             private long refreshTokenExpiration = 604_800_000L;
+
+            /** JWT issuer claim — identifies who issued the token. */
+            @NotBlank
+            private String issuer = "mini-banking-api";
+
+            /** JWT audience claim — identifies the intended recipient. */
+            @NotBlank
+            private String audience = "mini-banking-app";
         }
     }
 

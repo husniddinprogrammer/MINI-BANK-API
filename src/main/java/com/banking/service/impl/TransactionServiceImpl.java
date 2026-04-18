@@ -22,11 +22,13 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Objects;
 import java.util.UUID;
@@ -99,7 +101,7 @@ public class TransactionServiceImpl implements TransactionService {
             .balanceAfterTarget(account.getBalance())
             .currency(account.getCurrency())
             .description(request.description())
-            .processedAt(LocalDateTime.now())
+            .processedAt(LocalDateTime.now(ZoneOffset.UTC))
             .build();
 
         Transaction saved = transactionRepository.save(tx);
@@ -151,7 +153,7 @@ public class TransactionServiceImpl implements TransactionService {
             .balanceAfterSource(account.getBalance())
             .currency(account.getCurrency())
             .description(request.description())
-            .processedAt(LocalDateTime.now())
+            .processedAt(LocalDateTime.now(ZoneOffset.UTC))
             .build();
 
         Transaction saved = transactionRepository.save(tx);
@@ -180,8 +182,9 @@ public class TransactionServiceImpl implements TransactionService {
      *   <li>Balance is re-validated AFTER the lock (TOCTOU prevention).</li>
      * </ul>
      */
+    // SECURITY: REPEATABLE_READ prevents phantom reads during limit/balance checks inside the lock.
     @Override
-    @Transactional
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
     public TransactionResponse transfer(
         TransferRequest request,
         UUID userId,
@@ -202,37 +205,40 @@ public class TransactionServiceImpl implements TransactionService {
                     && !existing.getSourceAccount().getOwner().getId().equals(userId)) {
                     throw new UnauthorizedAccessException("You do not have access to this account");
                 }
+                // Detect key reuse with different parameters — same key must mean same request
+                boolean sameSource = existing.getSourceAccount() != null
+                    && existing.getSourceAccount().getId().equals(request.sourceAccountId());
+                boolean sameTarget = existing.getTargetAccount() != null
+                    && existing.getTargetAccount().getId().equals(request.targetAccountId());
+                boolean sameAmount = existing.getAmount().compareTo(request.amount()) == 0;
+                if (!sameSource || !sameTarget || !sameAmount) {
+                    throw new BankingException(
+                        "Idempotency key conflict: this key was already used for a different transfer",
+                        HttpStatus.UNPROCESSABLE_ENTITY);
+                }
                 return transactionMapper.toResponse(existing);
             }
         }
-
-        // ── Pre-lock validations (fast path to reject bad requests early) ────
 
         if (request.sourceAccountId().equals(request.targetAccountId())) {
             throw new BankingException("Source and target accounts cannot be the same",
                 HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
-        Account sourcePreCheck = accountRepository.findById(request.sourceAccountId())
-            .orElseThrow(() -> new ResourceNotFoundException("Account", "id", request.sourceAccountId()));
+        // ── Step 1: Ownership check ONLY — no state validation before lock ────
+        //
+        // SECURITY: TOCTOU (Time-Of-Check-Time-Of-Use) prevention.
+        // All state validations (active status, currency, limits, balance) happen
+        // AFTER acquiring pessimistic locks so the checked state is always current.
+        // Without this, an account could be frozen or a limit exceeded between the
+        // pre-check and the lock, allowing invalid transfers to slip through.
+        accountRepository.findByIdAndOwnerId(request.sourceAccountId(), userId)
+            .orElseThrow(() -> new UnauthorizedAccessException("You do not have access to this account"));
 
-        verifyOwnership(sourcePreCheck, userId);
-
-        Account targetPreCheck = accountRepository.findById(request.targetAccountId())
-            .orElseThrow(() -> new ResourceNotFoundException("Account", "id", request.targetAccountId()));
-
-        // Cross-currency not supported in V1
-        if (!sourcePreCheck.getCurrency().equals(targetPreCheck.getCurrency())) {
-            throw new BankingException("Cross-currency transfers are not supported",
-                HttpStatus.UNPROCESSABLE_ENTITY);
-        }
-
-        checkDailyLimit(request.sourceAccountId(), request.amount());
-        checkMonthlyLimit(request.sourceAccountId(), request.amount());
-
-        // ── Acquire pessimistic locks in consistent UUID order to prevent deadlock ─
-
-        // Sorting by UUID string value ensures both threads always lock in the same order
+        // ── Step 2: Acquire pessimistic locks in consistent UUID order ────────
+        //
+        // Locks lower UUID first — prevents deadlock when two concurrent transfers
+        // involve the same account pair in reverse directions (A→B and B→A).
         UUID firstLock = request.sourceAccountId().compareTo(request.targetAccountId()) < 0
             ? request.sourceAccountId() : request.targetAccountId();
         UUID secondLock = firstLock.equals(request.sourceAccountId())
@@ -246,10 +252,18 @@ public class TransactionServiceImpl implements TransactionService {
         Account source = firstLock.equals(request.sourceAccountId()) ? firstAccount : secondAccount;
         Account target = firstLock.equals(request.targetAccountId()) ? firstAccount : secondAccount;
 
-        // ── Post-lock re-validation (TOCTOU: balance may have changed since pre-check) ─
+        // ── Step 3: ALL state validations inside the lock ────────────────────
 
         verifyAccountActive(source);
         verifyAccountActive(target);
+
+        if (!source.getCurrency().equals(target.getCurrency())) {
+            throw new BankingException("Cross-currency transfers are not supported",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+
+        checkDailyLimit(request.sourceAccountId(), request.amount());
+        checkMonthlyLimit(request.sourceAccountId(), request.amount());
 
         BigDecimal fee = BigDecimal.ZERO; // Same-currency, same-bank: no fee
         BigDecimal totalRequired = request.amount().add(fee);
@@ -287,7 +301,7 @@ public class TransactionServiceImpl implements TransactionService {
             .balanceAfterTarget(target.getBalance())
             .currency(source.getCurrency())
             .description(request.description())
-            .processedAt(LocalDateTime.now())
+            .processedAt(LocalDateTime.now(ZoneOffset.UTC))
             .build();
 
         Transaction saved = transactionRepository.save(tx);
@@ -338,11 +352,11 @@ public class TransactionServiceImpl implements TransactionService {
     }
 
     private void checkDailyLimit(UUID accountId, BigDecimal amount) {
-        LocalDateTime startOfDay = LocalDateTime.now().toLocalDate().atStartOfDay();
+        LocalDateTime startOfDay = LocalDateTime.now(ZoneOffset.UTC).toLocalDate().atStartOfDay();
         LocalDateTime endOfDay = startOfDay.plusDays(1).minusNanos(1);
 
         BigDecimal dailyUsed = transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
-            accountId, startOfDay, endOfDay);
+            accountId, startOfDay, endOfDay).orElse(BigDecimal.ZERO);
 
         BigDecimal dailyLimit = properties.getBanking().getDailyTransferLimit();
 
@@ -352,11 +366,11 @@ public class TransactionServiceImpl implements TransactionService {
     }
 
     private void checkMonthlyLimit(UUID accountId, BigDecimal amount) {
-        LocalDateTime startOfMonth = LocalDateTime.now().toLocalDate().withDayOfMonth(1).atStartOfDay();
+        LocalDateTime startOfMonth = LocalDateTime.now(ZoneOffset.UTC).toLocalDate().withDayOfMonth(1).atStartOfDay();
         LocalDateTime endOfMonth = startOfMonth.plusMonths(1).minusNanos(1);
 
         BigDecimal monthlyUsed = transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
-            accountId, startOfMonth, endOfMonth);
+            accountId, startOfMonth, endOfMonth).orElse(BigDecimal.ZERO);
 
         BigDecimal monthlyLimit = properties.getBanking().getMonthlyTransferLimit();
 
@@ -372,7 +386,10 @@ public class TransactionServiceImpl implements TransactionService {
     private BigDecimal calculateWithdrawalFee(BigDecimal amount) {
         BigDecimal threshold = properties.getBanking().getLargeWithdrawalThreshold();
         if (amount.compareTo(threshold) > 0) {
-            return amount.multiply(FEE_RATE).setScale(MONETARY_SCALE, RoundingMode.HALF_UP);
+            // FINANCE: HALF_EVEN (Banker's Rounding) is the IEEE 754 standard for financial
+            // calculations. HALF_UP introduces systematic upward bias — over millions of
+            // transactions this causes measurable discrepancy in bank ledgers.
+            return amount.multiply(FEE_RATE).setScale(MONETARY_SCALE, RoundingMode.HALF_EVEN);
         }
         return BigDecimal.ZERO;
     }
@@ -381,7 +398,7 @@ public class TransactionServiceImpl implements TransactionService {
      * Generates a human-readable unique reference number: {@code TXN-YYYYMMDD-UUID8}.
      */
     private String generateReferenceNumber() {
-        String date = LocalDateTime.now().format(REF_DATE_FORMAT);
+        String date = LocalDateTime.now(ZoneOffset.UTC).format(REF_DATE_FORMAT);
         String shortUuid = UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
         return "TXN-" + date + "-" + shortUuid;
     }

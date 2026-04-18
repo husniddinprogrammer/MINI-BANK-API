@@ -34,7 +34,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.HexFormat;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -214,27 +216,43 @@ public class AuthServiceImpl implements AuthService {
     // ── Private helpers ──────────────────────────────────────────────────────
 
     /**
-     * Handles a failed login attempt: increments counter and locks account if threshold is reached.
+     * Handles a failed login attempt.
+     *
+     * <p>Uses a single atomic UPDATE to increment the counter and conditionally lock
+     * the account in one database round-trip — eliminates the TOCTOU race where two
+     * concurrent requests could both read the same pre-increment count and both decide
+     * the threshold is not yet reached (FIX-5).
+     *
+     * <p>Performs a dummy BCrypt hash when the email does not exist so that both
+     * "wrong password" and "unknown email" paths take the same ~100–300ms, preventing
+     * timing side-channel email enumeration (FIX-6).
      */
     private void handleFailedLogin(String email, String ipAddress, String userAgent, String reason) {
-        userRepository.findByEmail(email).ifPresent(user -> {
-            userRepository.incrementFailedLoginAttempts(user.getId());
+        Optional<User> userOpt = userRepository.findByEmail(email.toLowerCase().trim());
 
-            int threshold = properties.getBanking().getAccountLockoutAttempts();
-            // Re-read the incremented count from DB to avoid stale-read issues
-            if (user.getFailedLoginAttempts() + 1 >= threshold) {
-                LocalDateTime lockUntil = LocalDateTime.now()
-                    .plusMinutes(properties.getBanking().getAccountLockoutDurationMinutes());
-                userRepository.lockUser(user.getId(), lockUntil);
-                log.warn("Account locked due to {} failed attempts: userId={}, lockedUntil={}",
-                    threshold, user.getId(), lockUntil);
-            }
+        if (userOpt.isEmpty()) {
+            // SECURITY: Constant-time response regardless of email existence.
+            // BCrypt.encode() takes ~100-300ms. Without dummy hash,
+            // timing side-channel reveals which emails are registered.
+            passwordEncoder.encode("dummy-timing-equalization-string");
+            return;
+        }
 
-            auditLogService.logFailure(
-                user.getId().toString(), "LOGIN", "User",
-                user.getId().toString(), ipAddress, userAgent, null, reason
-            );
-        });
+        User user = userOpt.get();
+        int threshold = properties.getBanking().getAccountLockoutAttempts();
+        LocalDateTime lockUntil = LocalDateTime.now(ZoneOffset.UTC)
+            .plusMinutes(properties.getBanking().getAccountLockoutDurationMinutes());
+
+        // SECURITY: Single atomic UPDATE prevents race condition where
+        // concurrent login attempts could exceed lockout threshold
+        // without triggering the lock (TOCTOU vulnerability).
+        userRepository.incrementFailedAttemptsAndLockIfThreshold(user.getId(), threshold, lockUntil);
+        log.debug("Failed login recorded for userId={}, threshold={}", user.getId(), threshold);
+
+        auditLogService.logFailure(
+            user.getId().toString(), "LOGIN", "User",
+            user.getId().toString(), ipAddress, userAgent, null, reason
+        );
     }
 
     /**
@@ -246,7 +264,7 @@ public class AuthServiceImpl implements AuthService {
         return RefreshToken.builder()
             .token(hashToken(rawToken))
             .user(userRef)
-            .expiryDate(LocalDateTime.now()
+            .expiryDate(LocalDateTime.now(ZoneOffset.UTC)
                 .plusSeconds(properties.getSecurity().getJwt().getRefreshTokenExpiration() / 1000))
             .deviceInfo(userAgent != null ? userAgent.substring(0, Math.min(userAgent.length(), 200)) : null)
             .ipAddress(ipAddress)

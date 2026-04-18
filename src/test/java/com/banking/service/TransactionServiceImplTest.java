@@ -77,7 +77,7 @@ class TransactionServiceImplTest {
         banking.setMonthlyTransferLimit(new BigDecimal("500000000"));
         banking.setLargeWithdrawalThreshold(new BigDecimal("10000000"));
 
-        given(properties.getBanking()).willReturn(banking);
+        // properties.getBanking() stub added only in tests that reach the limit check
 
         ownerUserId = UUID.randomUUID();
         sourceAccountId = UUID.randomUUID();
@@ -113,19 +113,10 @@ class TransactionServiceImplTest {
             TransferRequest request = new TransferRequest(
                 sourceAccountId, targetAccountId, new BigDecimal("1000"), "test");
 
-            // Source account belongs to a different user (different UUID)
-            User differentOwner = new User();
-            Account sourceOtherOwner = Account.builder()
-                .accountNumber("8600111111111111")
-                .owner(differentOwner)
-                .status(AccountStatus.ACTIVE)
-                .balance(new BigDecimal("100000"))
-                .currency(Currency.UZS)
-                .build();
+            // findByIdAndOwnerId returns empty → account not found for this user → unauthorized
+            given(accountRepository.findByIdAndOwnerId(sourceAccountId, differentUserId))
+                .willReturn(Optional.empty());
 
-            given(accountRepository.findById(sourceAccountId)).willReturn(Optional.of(sourceOtherOwner));
-
-            // differentUserId != differentOwner.id (null) — ownership check should fail
             assertThatThrownBy(() ->
                 transactionService.transfer(request, differentUserId, null, "127.0.0.1", "UA"))
                 .isInstanceOf(UnauthorizedAccessException.class);
@@ -134,12 +125,11 @@ class TransactionServiceImplTest {
         @Test
         @DisplayName("should throw AccountFrozenException when source account is FROZEN")
         void shouldThrowWhenSourceIsFrozen() {
-            // ownerUserId is defined in setUp() and shared across tests
             TransferRequest request = new TransferRequest(
                 sourceAccountId, targetAccountId, new BigDecimal("1000"), "test");
 
             User owner = new User();
-            owner.setId(ownerUserId);   // must set ID so ownership check passes
+            owner.setId(ownerUserId);
             Account frozenSource = Account.builder()
                 .accountNumber("8600111111111111")
                 .owner(owner)
@@ -148,13 +138,9 @@ class TransactionServiceImplTest {
                 .currency(Currency.UZS)
                 .build();
 
-            given(accountRepository.findById(sourceAccountId)).willReturn(Optional.of(frozenSource));
-            given(accountRepository.findById(targetAccountId)).willReturn(Optional.of(target));
-            given(transactionRepository.existsByReferenceNumber(any())).willReturn(false);
-
-            given(transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
-                any(), any(), any())).willReturn(BigDecimal.ZERO);
-
+            // Ownership passes; verifyAccountActive is called inside the lock
+            given(accountRepository.findByIdAndOwnerId(sourceAccountId, ownerUserId))
+                .willReturn(Optional.of(frozenSource));
             given(accountRepository.findByIdWithPessimisticLock(any()))
                 .willAnswer(inv -> {
                     UUID id = inv.getArgument(0);
@@ -168,10 +154,51 @@ class TransactionServiceImplTest {
         }
 
         @Test
+        @DisplayName("TOCTOU: should throw AccountFrozenException when source is frozen between ownership check and lock")
+        void shouldThrowWhenSourceFrozenAfterOwnershipCheck() {
+            TransferRequest request = new TransferRequest(
+                sourceAccountId, targetAccountId, new BigDecimal("1000"), "test");
+
+            User owner = new User();
+            owner.setId(ownerUserId);
+
+            // Ownership check sees ACTIVE (no state validation at this point)
+            Account activeForOwnershipCheck = Account.builder()
+                .accountNumber("8600111111111111")
+                .owner(owner)
+                .status(AccountStatus.ACTIVE)
+                .currency(Currency.UZS)
+                .build();
+
+            // After lock is acquired, the account was frozen by a concurrent operation
+            Account frozenAfterLock = Account.builder()
+                .accountNumber("8600111111111111")
+                .owner(owner)
+                .status(AccountStatus.FROZEN)
+                .balance(new BigDecimal("100000"))
+                .currency(Currency.UZS)
+                .build();
+
+            given(accountRepository.findByIdAndOwnerId(sourceAccountId, ownerUserId))
+                .willReturn(Optional.of(activeForOwnershipCheck));
+            given(accountRepository.findByIdWithPessimisticLock(any()))
+                .willAnswer(inv -> {
+                    UUID id = inv.getArgument(0);
+                    if (id.equals(sourceAccountId)) return Optional.of(frozenAfterLock);
+                    return Optional.of(target);
+                });
+
+            assertThatThrownBy(() ->
+                transactionService.transfer(request, ownerUserId, null, "127.0.0.1", "UA"))
+                .isInstanceOf(AccountFrozenException.class);
+        }
+
+        @Test
         @DisplayName("should throw InsufficientFundsException when balance is too low")
         void shouldThrowWhenInsufficientFunds() {
+            // 1000 is within the 50M daily limit but exceeds the account balance of 100
             TransferRequest request = new TransferRequest(
-                sourceAccountId, targetAccountId, new BigDecimal("999999999"), "test");
+                sourceAccountId, targetAccountId, new BigDecimal("1000"), "test");
 
             User owner = new User();
             owner.setId(ownerUserId);
@@ -179,20 +206,22 @@ class TransactionServiceImplTest {
                 .accountNumber("8600111111111111")
                 .owner(owner)
                 .status(AccountStatus.ACTIVE)
-                .balance(new BigDecimal("100.0000"))  // << much less than requested
+                .balance(new BigDecimal("100.0000"))
                 .currency(Currency.UZS)
                 .build();
 
-            given(accountRepository.findById(sourceAccountId)).willReturn(Optional.of(poorSource));
-            given(accountRepository.findById(targetAccountId)).willReturn(Optional.of(target));
-            given(transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
-                any(), any(), any())).willReturn(BigDecimal.ZERO);
+            given(properties.getBanking()).willReturn(banking);
+            given(accountRepository.findByIdAndOwnerId(sourceAccountId, ownerUserId))
+                .willReturn(Optional.of(poorSource));
             given(accountRepository.findByIdWithPessimisticLock(any()))
                 .willAnswer(inv -> {
                     UUID id = inv.getArgument(0);
                     if (id.equals(sourceAccountId)) return Optional.of(poorSource);
                     return Optional.of(target);
                 });
+            // FIX-3: repository returns Optional<BigDecimal>; 0 already used → limit passes
+            given(transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
+                any(), any(), any())).willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
                 transactionService.transfer(request, ownerUserId, null, "127.0.0.1", "UA"))
@@ -202,7 +231,6 @@ class TransactionServiceImplTest {
         @Test
         @DisplayName("should throw TransferLimitExceededException when daily limit is exceeded")
         void shouldThrowWhenDailyLimitExceeded() {
-            // Requesting 1 UZS but already used up the entire 50M daily limit
             TransferRequest request = new TransferRequest(
                 sourceAccountId, targetAccountId, new BigDecimal("1"), "test");
 
@@ -216,13 +244,20 @@ class TransactionServiceImplTest {
                 .currency(Currency.UZS)
                 .build();
 
-            given(accountRepository.findById(sourceAccountId)).willReturn(Optional.of(richSource));
-            given(accountRepository.findById(targetAccountId)).willReturn(Optional.of(target));
-
-            // Daily already at 50M (exactly at limit)
+            given(properties.getBanking()).willReturn(banking);
+            given(accountRepository.findByIdAndOwnerId(sourceAccountId, ownerUserId))
+                .willReturn(Optional.of(richSource));
+            // Locks acquired before limit check — must mock pessimistic lock queries
+            given(accountRepository.findByIdWithPessimisticLock(any()))
+                .willAnswer(inv -> {
+                    UUID id = inv.getArgument(0);
+                    if (id.equals(sourceAccountId)) return Optional.of(richSource);
+                    return Optional.of(target);
+                });
+            // FIX-3: Optional return; daily already at 50M → limit exceeded
             given(transactionRepository.sumCompletedTransferAmountByAccountIdAndDateRange(
                 eq(sourceAccountId), any(), any()))
-                .willReturn(new BigDecimal("50000000"));
+                .willReturn(Optional.of(new BigDecimal("50000000")));
 
             assertThatThrownBy(() ->
                 transactionService.transfer(request, ownerUserId, null, "127.0.0.1", "UA"))

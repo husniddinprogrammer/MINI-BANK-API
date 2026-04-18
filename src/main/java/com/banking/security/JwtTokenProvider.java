@@ -87,6 +87,8 @@ public class JwtTokenProvider {
         String jti = UUID.randomUUID().toString();
         log.debug("Generating access token with jti={} for user={}", jti, userDetails.getUsername());
 
+        ApplicationProperties.Security.Jwt jwtProps = properties.getSecurity().getJwt();
+
         return Jwts.builder()
             .subject(userDetails.getUsername())
             .claim("userId", userDetails.getUserId().toString())
@@ -94,6 +96,10 @@ public class JwtTokenProvider {
             .id(jti)                        // jti claim for token revocation support
             .issuedAt(Date.from(now))
             .expiration(Date.from(expiry))
+            // SECURITY: iss+aud validation prevents token substitution attacks where
+            // a token issued by another service (same key) is replayed against this API.
+            .issuer(jwtProps.getIssuer())
+            .audience().add(jwtProps.getAudience()).and()
             .signWith(signingKey)            // HS512 inferred from key length
             .compact();
     }
@@ -133,6 +139,9 @@ public class JwtTokenProvider {
             return true;
         } catch (ExpiredJwtException e) {
             log.warn("JWT token is expired");
+        } catch (ClaimJwtException e) {
+            // Covers IncorrectClaimException (wrong iss/aud) and MissingClaimException
+            log.warn("JWT claim validation failed: {}", e.getMessage());
         } catch (UnsupportedJwtException e) {
             log.warn("JWT token is unsupported");
         } catch (MalformedJwtException e) {
@@ -154,8 +163,13 @@ public class JwtTokenProvider {
      * @throws JwtException if the token is invalid
      */
     private Claims parseClaims(String token) {
+        ApplicationProperties.Security.Jwt jwtProps = properties.getSecurity().getJwt();
         return Jwts.parser()
             .verifyWith(signingKey)
+            // SECURITY: iss+aud validation prevents token substitution attacks where
+            // a token issued by another service (same key) is replayed against this API.
+            .requireIssuer(jwtProps.getIssuer())
+            .requireAudience(jwtProps.getAudience())
             .build()
             .parseSignedClaims(token)
             .getPayload();

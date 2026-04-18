@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Asynchronous audit trail writer.
@@ -110,11 +111,11 @@ public class AuditLogService {
                 .entityType(entityType)
                 .entityId(entityId)
                 .ipAddress(ipAddress)
-                .userAgent(truncate(userAgent, 200))
+                .userAgent(truncate(userAgent, 500))
                 .requestDetails(requestDetails)
                 .result(result)
                 .failureReason(failureReason)
-                .timestamp(LocalDateTime.now())
+                .timestamp(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
 
             auditLogRepository.save(auditLog);

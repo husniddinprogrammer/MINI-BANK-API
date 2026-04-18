@@ -5,6 +5,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Persisted refresh token record for the JWT token rotation strategy.
@@ -67,7 +68,7 @@ public class RefreshToken extends BaseEntity {
      * @return {@code true} if the token's expiry time is in the past.
      */
     public boolean isExpired() {
-        return LocalDateTime.now().isAfter(expiryDate);
+        return LocalDateTime.now(ZoneOffset.UTC).isAfter(expiryDate);
     }
 
     /**

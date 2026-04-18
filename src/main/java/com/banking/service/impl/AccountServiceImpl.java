@@ -12,6 +12,7 @@ import com.banking.exception.ResourceNotFoundException;
 import com.banking.exception.UnauthorizedAccessException;
 import com.banking.mapper.AccountMapper;
 import com.banking.repository.AccountRepository;
+import com.banking.repository.TransactionRepository;
 import com.banking.repository.UserRepository;
 import com.banking.service.AccountService;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,8 @@ import java.security.SecureRandom;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
+
+import static java.util.Objects.requireNonNull;
 
 /**
  * Implements account lifecycle operations: creation, retrieval, and soft-close.
@@ -47,6 +50,7 @@ public class AccountServiceImpl implements AccountService {
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final AccountRepository accountRepository;
+    private final TransactionRepository transactionRepository;
     private final UserRepository userRepository;
     private final AccountMapper accountMapper;
     private final ApplicationProperties properties;
@@ -74,8 +78,10 @@ public class AccountServiceImpl implements AccountService {
             );
         }
 
+        boolean hasPrimary = accountRepository.existsPrimaryAccountForUser(userId);
+
         // If user requests primary but already has one, demote the existing one
-        if (request.isPrimary() && accountRepository.existsPrimaryAccountForUser(userId)) {
+        if (request.isPrimary() && hasPrimary) {
             accountRepository.findPrimaryAccountByOwnerId(userId)
                 .ifPresent(existing -> {
                     existing.setPrimary(false);
@@ -83,8 +89,7 @@ public class AccountServiceImpl implements AccountService {
                 });
         }
 
-        boolean shouldBePrimary = request.isPrimary() ||
-            !accountRepository.existsPrimaryAccountForUser(userId);
+        boolean shouldBePrimary = request.isPrimary() || !hasPrimary;
 
         Account account = Account.builder()
             .accountNumber(generateUniqueAccountNumber())
@@ -98,7 +103,7 @@ public class AccountServiceImpl implements AccountService {
             .status(AccountStatus.ACTIVE)
             .build();
 
-        Account saved = accountRepository.save(account);
+        Account saved = requireNonNull(accountRepository.save(account));
 
         auditLogService.logSuccess(
             userId.toString(), "ACCOUNT_CREATED", "Account",
@@ -160,6 +165,14 @@ public class AccountServiceImpl implements AccountService {
             );
         }
 
+        // Block closure while in-flight transactions are still unsettled
+        if (transactionRepository.countPendingByAccountId(accountId) > 0) {
+            throw new BankingException(
+                "Cannot close account with pending transactions. Please wait for all transactions to settle.",
+                HttpStatus.UNPROCESSABLE_ENTITY
+            );
+        }
+
         account.setStatus(AccountStatus.CLOSED);
         accountRepository.save(account);
 
@@ -180,6 +193,9 @@ public class AccountServiceImpl implements AccountService {
      * @throws UnauthorizedAccessException if ownership check fails
      */
     private Account findAndVerifyOwnership(UUID accountId, UUID userId) {
+        requireNonNull(accountId, "accountId must not be null");
+        requireNonNull(userId, "userId must not be null");
+
         Account account = accountRepository.findById(accountId)
             .orElseThrow(() -> new ResourceNotFoundException("Account", "id", accountId));
 

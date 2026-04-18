@@ -92,4 +92,18 @@ public interface AccountRepository extends JpaRepository<Account, UUID> {
      */
     @Query("SELECT a FROM Account a WHERE a.owner.id = :ownerId AND a.isPrimary = TRUE")
     Optional<Account> findPrimaryAccountByOwnerId(@Param("ownerId") UUID ownerId);
+
+    /**
+     * Finds an account only if it belongs to the specified owner.
+     *
+     * <p>Used in transfer pre-lock ownership check: verifies the requesting user owns
+     * the source account without loading any other state that could become stale before
+     * the pessimistic lock is acquired.
+     *
+     * @param id      the account UUID
+     * @param ownerId the expected owner's UUID
+     * @return the account if it exists and belongs to the owner, empty otherwise
+     */
+    @Query("SELECT a FROM Account a WHERE a.id = :id AND a.owner.id = :ownerId")
+    Optional<Account> findByIdAndOwnerId(@Param("id") UUID id, @Param("ownerId") UUID ownerId);
 }

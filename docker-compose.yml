@@ -44,8 +44,9 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       # JWT — must be a Base64-encoded 512-bit (64-byte) secret
       JWT_SECRET: ${JWT_SECRET}
-      # Spring profile — use prod for production
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-dev}
+      # SECURITY: Defaults to prod so a missing env var never accidentally runs
+      # a container with dev settings (verbose logging, relaxed security).
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
     ports:
       - "${APP_PORT:-8080}:8080"
     networks:

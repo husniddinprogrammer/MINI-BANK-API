@@ -10,6 +10,7 @@ import org.springframework.security.core.userdetails.UserDetails;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -139,7 +140,7 @@ public class User extends BaseEntity implements UserDetails {
     @Override
     public boolean isAccountNonLocked() {
         // Re-check timed lockout on each authentication attempt
-        if (lockedUntil != null && LocalDateTime.now().isBefore(lockedUntil)) {
+        if (lockedUntil != null && LocalDateTime.now(ZoneOffset.UTC).isBefore(lockedUntil)) {
             return false;
         }
         return accountNonLocked;

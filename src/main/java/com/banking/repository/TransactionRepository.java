@@ -56,13 +56,16 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * @param to        window end (inclusive)
      * @return total transferred amount, or {@link BigDecimal#ZERO} if none
      */
+    // COALESCE(SUM(...), 0) avoided: the literal 0 creates a BigDecimal with scale=0,
+    // which causes inconsistent scale in subsequent arithmetic. Return Optional instead
+    // and let callers supply .orElse(BigDecimal.ZERO) with correct scale.
     @Query("""
-        SELECT COALESCE(SUM(t.amount), 0) FROM Transaction t
+        SELECT SUM(t.amount) FROM Transaction t
         WHERE t.sourceAccount.id = :accountId
           AND t.status = com.banking.enums.TransactionStatus.COMPLETED
           AND t.createdAt BETWEEN :from AND :to
         """)
-    BigDecimal sumCompletedTransferAmountByAccountIdAndDateRange(
+    Optional<BigDecimal> sumCompletedTransferAmountByAccountIdAndDateRange(
         @Param("accountId") UUID accountId,
         @Param("from") LocalDateTime from,
         @Param("to") LocalDateTime to
@@ -86,4 +89,18 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * @return {@code true} if already processed
      */
     boolean existsByReferenceNumber(String referenceNumber);
+
+    /**
+     * Counts PENDING transactions involving the given account (as source or target).
+     * Used to block account closure while in-flight transactions are still unsettled.
+     *
+     * @param accountId the account UUID
+     * @return number of pending transactions
+     */
+    @Query("""
+        SELECT COUNT(t) FROM Transaction t
+        WHERE (t.sourceAccount.id = :accountId OR t.targetAccount.id = :accountId)
+          AND t.status = com.banking.enums.TransactionStatus.PENDING
+        """)
+    long countPendingByAccountId(@Param("accountId") UUID accountId);
 }

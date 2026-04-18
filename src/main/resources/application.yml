@@ -4,9 +4,23 @@
 # Secrets are NEVER hardcoded; they are injected via environment variables.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# SECURITY: Prevents request body DoS attacks (large payload flooding).
+# 1MB is sufficient for all banking API endpoints.
+# Adjust only if a file upload feature is added with justification.
+server:
+  tomcat:
+    max-http-post-size: 1MB
+    max-http-header-size: 16KB
+  max-http-request-header-size: 16KB
+
 spring:
   application:
     name: mini-banking-api
+
+  servlet:
+    multipart:
+      max-file-size: 1MB
+      max-request-size: 1MB
 
   # Default profile when no SPRING_PROFILES_ACTIVE env var is set
   profiles:
@@ -67,6 +81,8 @@ app:
       secret: ${JWT_SECRET:dGVzdC1zZWNyZXQta2V5LW11c3QtYmUtYXQtbGVhc3QtNTEyLWJpdHMtbG9uZy1mb3ItaHM1MTItYWxnb3JpdGhtLXBhZGRpbmc=}
       access-token-expiration: 900000       # 15 minutes in ms
       refresh-token-expiration: 604800000   # 7 days in ms
+      issuer: mini-banking-api
+      audience: mini-banking-app
   banking:
     max-accounts-per-user: 5
     daily-transfer-limit: 50000000          # 50 000 000 UZS
@@ -88,7 +104,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/mini_banking}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:husniddin}
+    password: ${DB_PASSWORD:husniddin}   # dev-only fallback; set DB_PASSWORD env var in prod
     hikari:
       maximum-pool-size: 10
       minimum-idle: 2

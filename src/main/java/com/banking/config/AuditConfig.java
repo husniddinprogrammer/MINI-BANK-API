@@ -1,5 +1,6 @@
 package com.banking.config;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.domain.AuditorAware;
@@ -25,6 +26,7 @@ import java.util.concurrent.Executor;
  * @author Mini Banking API
  * @version 1.0
  */
+@Slf4j
 @Configuration
 @EnableJpaAuditing(auditorAwareRef = "auditorAware")
 @EnableAsync
@@ -50,12 +52,27 @@ public class AuditConfig {
     @Bean(name = "auditExecutor")
     public Executor auditExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
-        executor.setCorePoolSize(2);
-        executor.setMaxPoolSize(5);
-        executor.setQueueCapacity(100);
-        executor.setThreadNamePrefix("audit-");
+        executor.setCorePoolSize(5);
+        executor.setMaxPoolSize(20);
+        // RELIABILITY: Queue=500 handles ~500 concurrent users without degradation.
+        executor.setQueueCapacity(500);
+        executor.setThreadNamePrefix("audit-exec-");
+        executor.setKeepAliveSeconds(60);
         executor.setWaitForTasksToCompleteOnShutdown(true);
-        executor.setAwaitTerminationSeconds(10);
+        executor.setAwaitTerminationSeconds(30);
+
+        // RELIABILITY: CallerRunsPolicy ensures audit records are NEVER silently dropped
+        // when the thread pool is saturated. In banking, every transaction must be audited.
+        // Slows the request under extreme load, but preserves the audit trail.
+        executor.setRejectedExecutionHandler((task, pool) -> {
+            log.error("Audit executor queue full — running on caller thread. " +
+                "Consider increasing queue capacity. activeThreads={}, queueSize={}",
+                pool.getActiveCount(), pool.getQueue().size());
+            if (!pool.isShutdown()) {
+                task.run();
+            }
+        });
+
         executor.initialize();
         return executor;
     }
