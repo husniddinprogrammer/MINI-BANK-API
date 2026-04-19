@@ -18,6 +18,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
@@ -152,7 +153,10 @@ public class TransactionController {
         @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         UUID userId = SecurityUtils.getCurrentUserId();
-        Page<TransactionResponse> history = transactionService.getTransactionHistory(accountId, userId, pageable);
+        Pageable capped = pageable.getPageSize() > 100
+            ? PageRequest.of(pageable.getPageNumber(), 100, pageable.getSort())
+            : pageable;
+        Page<TransactionResponse> history = transactionService.getTransactionHistory(accountId, userId, capped);
         return ResponseEntity.ok(ApiResponse.success("Transaction history retrieved", history));
     }
 

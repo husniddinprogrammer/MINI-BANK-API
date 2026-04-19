@@ -110,7 +110,7 @@ public class AuthServiceImpl implements AuthService {
      * </ol>
      */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = BankingException.class)
     public AuthResponse login(LoginRequest request, String ipAddress, String userAgent) {
         log.debug("Login attempt for email: {}", request.email());
 
