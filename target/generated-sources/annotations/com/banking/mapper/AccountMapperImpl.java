@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
 
 @Generated(
     value = "org.mapstruct.ap.MappingProcessor",
-    date = "2026-04-18T22:23:18+0500",
-    comments = "version: 1.5.5.Final, compiler: javac, environment: Java 17.0.12 (Oracle Corporation)"
+    date = "2026-04-21T06:31:14+0500",
+    comments = "version: 1.5.5.Final, compiler: Eclipse JDT (IDE) 3.46.0.v20260407-0427, environment: Java 21.0.10 (Eclipse Adoptium)"
 )
 @Component
 public class AccountMapperImpl implements AccountMapper {
@@ -24,15 +24,15 @@ public class AccountMapperImpl implements AccountMapper {
         AccountResponse.AccountResponseBuilder accountResponse = AccountResponse.builder();
 
         accountResponse.ownerId( accountOwnerId( account ) );
-        accountResponse.id( account.getId() );
         accountResponse.accountNumber( account.getAccountNumber() );
         accountResponse.accountType( account.getAccountType() );
-        accountResponse.status( account.getStatus() );
         accountResponse.balance( account.getBalance() );
+        accountResponse.createdAt( account.getCreatedAt() );
         accountResponse.currency( account.getCurrency() );
         accountResponse.dailyTransferLimit( account.getDailyTransferLimit() );
+        accountResponse.id( account.getId() );
         accountResponse.monthlyTransferLimit( account.getMonthlyTransferLimit() );
-        accountResponse.createdAt( account.getCreatedAt() );
+        accountResponse.status( account.getStatus() );
 
         return accountResponse.build();
     }

@@ -8,8 +8,8 @@ import org.springframework.stereotype.Component;
 
 @Generated(
     value = "org.mapstruct.ap.MappingProcessor",
-    date = "2026-04-18T22:23:18+0500",
-    comments = "version: 1.5.5.Final, compiler: javac, environment: Java 17.0.12 (Oracle Corporation)"
+    date = "2026-04-21T06:31:15+0500",
+    comments = "version: 1.5.5.Final, compiler: Eclipse JDT (IDE) 3.46.0.v20260407-0427, environment: Java 21.0.10 (Eclipse Adoptium)"
 )
 @Component
 public class UserMapperImpl implements UserMapper {
@@ -24,13 +24,13 @@ public class UserMapperImpl implements UserMapper {
 
         userResponse.id( user.getId() );
         userResponse.createdAt( user.getCreatedAt() );
+        userResponse.dateOfBirth( user.getDateOfBirth() );
+        userResponse.email( user.getEmail() );
+        userResponse.enabled( user.isEnabled() );
         userResponse.firstName( user.getFirstName() );
         userResponse.lastName( user.getLastName() );
-        userResponse.email( user.getEmail() );
         userResponse.phoneNumber( user.getPhoneNumber() );
-        userResponse.dateOfBirth( user.getDateOfBirth() );
         userResponse.role( user.getRole() );
-        userResponse.enabled( user.isEnabled() );
 
         return userResponse.build();
     }
@@ -43,11 +43,11 @@ public class UserMapperImpl implements UserMapper {
 
         User user = new User();
 
+        user.setDateOfBirth( request.dateOfBirth() );
+        user.setEmail( request.email() );
         user.setFirstName( request.firstName() );
         user.setLastName( request.lastName() );
-        user.setEmail( request.email() );
         user.setPhoneNumber( request.phoneNumber() );
-        user.setDateOfBirth( request.dateOfBirth() );
 
         return user;
     }

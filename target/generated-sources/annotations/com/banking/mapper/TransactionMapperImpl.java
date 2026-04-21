@@ -9,8 +9,8 @@ import org.springframework.stereotype.Component;
 
 @Generated(
     value = "org.mapstruct.ap.MappingProcessor",
-    date = "2026-04-18T22:23:18+0500",
-    comments = "version: 1.5.5.Final, compiler: javac, environment: Java 17.0.12 (Oracle Corporation)"
+    date = "2026-04-21T06:31:15+0500",
+    comments = "version: 1.5.5.Final, compiler: Eclipse JDT (IDE) 3.46.0.v20260407-0427, environment: Java 21.0.10 (Eclipse Adoptium)"
 )
 @Component
 public class TransactionMapperImpl implements TransactionMapper {
@@ -26,20 +26,20 @@ public class TransactionMapperImpl implements TransactionMapper {
         transactionResponse.sourceAccountId( transactionSourceAccountId( transaction ) );
         transactionResponse.targetAccountId( transactionTargetAccountId( transaction ) );
         transactionResponse.createdAt( transaction.getCreatedAt() );
-        transactionResponse.id( transaction.getId() );
-        transactionResponse.referenceNumber( transaction.getReferenceNumber() );
-        transactionResponse.type( transaction.getType() );
-        transactionResponse.status( transaction.getStatus() );
         transactionResponse.amount( transaction.getAmount() );
-        transactionResponse.fee( transaction.getFee() );
-        transactionResponse.balanceBeforeSource( transaction.getBalanceBeforeSource() );
         transactionResponse.balanceAfterSource( transaction.getBalanceAfterSource() );
-        transactionResponse.balanceBeforeTarget( transaction.getBalanceBeforeTarget() );
         transactionResponse.balanceAfterTarget( transaction.getBalanceAfterTarget() );
+        transactionResponse.balanceBeforeSource( transaction.getBalanceBeforeSource() );
+        transactionResponse.balanceBeforeTarget( transaction.getBalanceBeforeTarget() );
         transactionResponse.currency( transaction.getCurrency() );
         transactionResponse.description( transaction.getDescription() );
         transactionResponse.failureReason( transaction.getFailureReason() );
+        transactionResponse.fee( transaction.getFee() );
+        transactionResponse.id( transaction.getId() );
         transactionResponse.processedAt( transaction.getProcessedAt() );
+        transactionResponse.referenceNumber( transaction.getReferenceNumber() );
+        transactionResponse.status( transaction.getStatus() );
+        transactionResponse.type( transaction.getType() );
 
         return transactionResponse.build();
     }
